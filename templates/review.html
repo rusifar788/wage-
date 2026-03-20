@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Review {{ idx }} of {{ total }} — Wage Command</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<div class="review-shell">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+
+    <div class="sb-logo">
+      <div class="wordmark" style="margin-bottom:0">
+        <div class="wm-icon" style="width:28px;height:28px;border-radius:7px">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px">
+            <rect x="2" y="3" width="16" height="11" rx="1.5"/><path d="M7 17h6M10 14v3"/>
+          </svg>
+        </div>
+        <span class="wm-text" style="font-size:13px">Wage<em>Command</em></span>
+      </div>
+    </div>
+
+    <div class="sb-nav">Review</div>
+    <div class="sb-num">{{ idx }}<span> / {{ total }}</span></div>
+
+    <div class="prog-wrap" style="margin-top:0">
+      <div class="prog-hdr"><span>Progress</span><span>{{ done }} / {{ total }}</span></div>
+      <div class="prog-track"><div class="prog-fill" style="width:{{ (done/total*100) if total else 0 }}%"></div></div>
+    </div>
+
+    <div class="sb-div"></div>
+
+    <div class="sb-fl">Employee</div>
+    <div class="sb-val">{{ entry.name }}</div>
+
+    <div class="sb-fl">Net Wage</div>
+    <div class="sb-val mono">{{ entry.amount_text }}</div>
+
+    <div class="sb-fl">Wage Page</div>
+    <div class="sb-val sm">{{ entry.page }}</div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}{% for category, message in messages %}
+      <div class="alert" style="margin-bottom:10px">{{ message }}</div>
+    {% endfor %}{% endif %}
+    {% endwith %}
+
+    {% if entry.candidates %}
+    <div class="sb-hint">Tick matching bank lines, then click Highlight. Strong matches are pre-selected.</div>
+    <form method="post" action="{{ url_for('decide') }}" id="sideForm">
+      <div class="sb-actions">
+        <button type="submit" name="action" value="approve">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          Highlight Selected
+        </button>
+        <button type="submit" name="action" value="skip" class="btn-sec">Skip Employee</button>
+      </div>
+    </form>
+    {% else %}
+    <div class="alert" style="margin-bottom:10px">No strong match found.</div>
+    <form method="post" action="{{ url_for('decide') }}">
+      <button type="submit" name="action" value="skip" class="btn-sec" style="width:100%">Skip Employee</button>
+    </form>
+    {% endif %}
+
+  </aside>
+
+  <!-- Main -->
+  <div class="review-main">
+
+    <div class="rev-head appear">
+      <div>
+        <div class="rh-counter">Employee {{ idx }} of {{ total }}</div>
+        <div class="rh-name">{{ entry.name }}</div>
+      </div>
+      <div class="mono-tag">{{ done }} done</div>
+    </div>
+
+    <div class="emp-strip appear-2">
+      <div class="emp-cell">
+        <div class="ef-lbl">Employee Name</div>
+        <div class="ef-val">{{ entry.name }}</div>
+      </div>
+      <div class="emp-cell">
+        <div class="ef-lbl">Net Wage</div>
+        <div class="ef-val mono">{{ entry.amount_text }}</div>
+      </div>
+      <div class="emp-cell">
+        <div class="ef-lbl">Wage Page</div>
+        <div class="ef-val" style="font-family:'JetBrains Mono',monospace;font-size:17px;font-weight:500">{{ entry.page }}</div>
+      </div>
+    </div>
+
+    {% if entry.candidates %}
+    <form method="post" action="{{ url_for('decide') }}" id="mainForm">
+
+      <div class="alert alert-info appear-2">
+        Multi-select enabled — tick all matching lines for split payments. Only the selected transaction block is highlighted.
+      </div>
+
+      <div class="cand-list appear-3">
+        {% for c in entry.candidates %}
+        {% set pct = (c.score * 100)|int %}
+        {% set tier = 'green' if c.score >= 0.80 else ('amber' if c.score >= 0.60 else 'grey') %}
+        <label class="cand-card">
+          <div class="c-stripe cs-{{ tier }}"></div>
+          <div class="cand-row">
+            <input type="checkbox" name="candidate_id" value="{{ c.candidate_id }}"
+              {% if c.candidate_id in entry.preselected_candidates %}checked{% endif %}>
+            <div>
+              <div class="score-row">
+                <span class="score-n">{{ pct }}%</span>
+                <div class="score-track"><div class="score-bar sb-{{ tier }}" style="width:{{ pct }}%"></div></div>
+                {% if c.candidate_id in entry.preselected_candidates %}<span class="auto-tag">Auto</span>{% endif %}
+              </div>
+              <div class="cand-text">{{ c.text }}</div>
+            </div>
+            <div class="pg-tag">Pg {{ c.page }}</div>
+          </div>
+          {% if c.context %}
+          <div class="ctx-block">{% for line in c.context %}<div>{{ line }}</div>{% endfor %}</div>
+          {% endif %}
+          {% if c.amounts %}
+          <div class="amt-row">Amounts: {{ c.amounts|join(', ') }}</div>
+          {% endif %}
+        </label>
+        {% endfor %}
+      </div>
+
+      <div class="mob-actions">
+        <button type="submit" name="action" value="approve">Highlight Selected</button>
+        <button type="submit" name="action" value="skip" class="btn-sec">Skip</button>
+      </div>
+
+    </form>
+    {% else %}
+    <div class="alert appear-2">No strong similar narration found for this employee.</div>
+    <form method="post" action="{{ url_for('decide') }}">
+      <div class="mob-actions"><button type="submit" name="action" value="skip" class="btn-sec">Skip Employee</button></div>
+    </form>
+    {% endif %}
+
+  </div>
+</div>
+
+<script>
+  const sideForm = document.getElementById('sideForm');
+  const mainForm = document.getElementById('mainForm');
+  if (sideForm && mainForm) {
+    sideForm.addEventListener('submit', function(e) {
+      e.preventDefault();
+      const h = document.createElement('input');
+      h.type='hidden'; h.name='action';
+      h.value = e.submitter ? e.submitter.value : 'approve';
+      mainForm.appendChild(h); mainForm.requestSubmit();
+    });
+  }
+  document.addEventListener('keydown', function(e) {
+    if (e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA') return;
+    if (e.key==='Enter' && mainForm) {
+      const h=document.createElement('input');h.type='hidden';h.name='action';h.value='approve';
+      mainForm.appendChild(h);mainForm.requestSubmit();
+    }
+    if (e.key==='Escape') {
+      const f=document.querySelector('form');
+      if(f){const h=document.createElement('input');h.type='hidden';h.name='action';h.value='skip';f.appendChild(h);f.requestSubmit();}
+    }
+  });
+</script>
+</body>
+</html>

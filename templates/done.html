@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Review Complete — Wage Command</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<div class="done-shell">
+  <div class="done-card">
+
+    <div class="wordmark" style="justify-content:center;margin-bottom:36px">
+      <div class="wm-icon" style="width:28px;height:28px;border-radius:7px">
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px">
+          <rect x="2" y="3" width="16" height="11" rx="1.5"/><path d="M7 17h6M10 14v3"/>
+        </svg>
+      </div>
+      <span class="wm-text" style="font-size:13px">Wage<em>Command</em></span>
+    </div>
+
+    <div class="done-icon">
+      <div class="done-ring-2"></div>
+      <div class="done-ring"></div>
+      <div class="done-circle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+      </div>
+    </div>
+
+    <span class="eyebrow" style="display:block;text-align:center;margin-bottom:10px">Review Complete</span>
+    <h1>All employees<br><em>reviewed</em></h1>
+    <p class="lead">Download the highlighted PDF and CSV audit report, or start a fresh run with new documents.</p>
+
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="s-lbl">Total</div>
+        <div class="s-num">{{ total }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="s-lbl">Highlighted</div>
+        <div class="s-num">{{ yes_count }}</div>
+      </div>
+      <div class="stat-card">
+        <div class="s-lbl">Skipped</div>
+        <div class="s-num">{{ skip_count }}</div>
+      </div>
+    </div>
+
+    <div class="match-box">
+      <div class="match-hdr">
+        <span class="match-lbl">Match Rate</span>
+        <span class="match-pct">{{ "%.0f"|format((yes_count/total*100) if total else 0) }}%</span>
+      </div>
+      <div class="prog-track">
+        <div class="prog-fill" style="width:{{ ((yes_count/total*100) if total else 0)|int }}%"></div>
+      </div>
+    </div>
+
+    <div class="done-btns">
+      <a class="btn btn-primary btn-wide" href="{{ url_for('download_pdf') }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Download Highlighted PDF
+      </a>
+      <a class="btn btn-csv btn-wide" href="{{ url_for('download_csv') }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+        </svg>
+        Download Review CSV
+      </a>
+      <a class="btn btn-pages btn-wide" href="{{ url_for('download_pages_pdf') }}">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <circle cx="12" cy="15" r="2"/><path d="M12 11v2M12 17v2"/>
+        </svg>
+        Download Highlighted Pages Only
+      </a>
+      <a class="btn btn-ghost btn-wide" href="{{ url_for('index') }}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="1 4 1 10 7 10"/>
+          <path d="M3.51 15a9 9 0 1 0 .49-3.1"/>
+        </svg>
+        Start New Run
+      </a>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>
