@@ -64,33 +64,67 @@ def normalize_name(name: str) -> str:
 
 
 def is_probable_name_line(line: str) -> bool:
-    upper = line.upper().strip()
+    upper = re.sub(r"\s+", " ", line.upper()).strip()
     if not upper:
         return False
     if any(ch.isdigit() for ch in upper):
         return False
-    if RECORD_PREFIX_RE.search(upper):
-        return False
-    tokens = upper.split()
+
+    tokens = re.findall(r"[A-Z]+", upper)
     if not tokens:
         return False
+
+    # Allow person-name patterns with initials like "P BABU" or
+    # "S THOMAS PURUSOTHANAN" even though they start with a single letter.
+    looks_like_initial_name = (
+        len(tokens) >= 2
+        and len(tokens[0]) == 1
+        and all(tok.isalpha() for tok in tokens[1:])
+    )
+
+    if RECORD_PREFIX_RE.search(upper) and not looks_like_initial_name:
+        return False
+
     if len(tokens) == 1 and tokens[0] in IGNORE_WORDS:
         return False
+
+    # Hard reject obvious non-name lines.
+    non_name = {"BANK", "TOTAL", "GRAND", "PARTNER", "SIGNATURE", "PAGE"}
+    if all(tok in non_name or tok in IGNORE_WORDS or tok in BAN_TOKENS for tok in tokens):
+        return False
+
     cleaned = [t for t in tokens if t not in IGNORE_WORDS and t not in BAN_TOKENS]
     return len(cleaned) >= 1
 
 
 def clean_wage_name(raw: str) -> str:
-    tokens = normalize_name(raw).split()
-    while tokens and tokens[0] in BANK_PREFIXES:
-        tokens.pop(0)
-    tokens = [t for t in tokens if t not in BAN_TOKENS]
-    # key fix: avoid junk rows like LEAVE / BONUS / TOTAL.
-    if len(tokens) < 1:
+    raw_tokens = re.findall(r"[A-Z]+", raw.upper())
+    if not raw_tokens:
         return ""
-    if all(t in IGNORE_WORDS or t in BAN_TOKENS for t in tokens):
+
+    while raw_tokens and raw_tokens[0] in BANK_PREFIXES:
+        raw_tokens.pop(0)
+
+    filtered = []
+    for tok in raw_tokens:
+        if tok in BAN_TOKENS or tok in IGNORE_WORDS:
+            continue
+        # Keep initials only when they are part of a real name.
+        if len(tok) == 1 and len(raw_tokens) == 1:
+            continue
+        filtered.append(tok)
+
+    if not filtered:
         return ""
-    return " ".join(tokens)
+
+    # Remove trailing single-letter fragments unless the whole name is just
+    # initial + surname style.
+    if len(filtered) >= 3:
+        while filtered and len(filtered[-1]) == 1:
+            filtered.pop()
+    if not filtered:
+        return ""
+    return " ".join(filtered)
 
 
 def extract_bank_name(narration: str) -> str:
@@ -133,22 +167,77 @@ def name_similarity(wage_name: str, bank_text: str) -> float:
 
 
 def extract_wage_entries(pdf: Path) -> List[dict]:
-    """Extract wage employees by serial-number blocks instead of layout heuristics.
-    This is more robust on later pages where the register layout shifts.
+    """Extract wage employees from multiple register layouts.
+
+    Supports both layouts where the serial number appears before the net payable
+    and layouts where the serial number appears after gross/deduction columns.
     """
     entries: List[dict] = []
     expected_serial = 1
-    amount_pattern = re.compile(r"\d[\d,]*\.\d{2}")
+    dec_amount_pattern = re.compile(r"\d[\d,]*\.\d{2}")
+    int_amount_pattern = re.compile(r"\d[\d,]*")
 
-    def find_net_amount(lines: List[str], serial_idx: int) -> Optional[tuple[float, str]]:
-        for k in range(serial_idx + 1, min(len(lines), serial_idx + 10)):
-            line = lines[k].strip()
-            if not line:
+    def parse_float(raw: str) -> Optional[float]:
+        try:
+            return float(raw.replace(',', ''))
+        except Exception:
+            return None
+
+    def is_serial_line(line: str, expected: int) -> bool:
+        return line.strip() == str(expected)
+
+    def candidate_amounts_from_line(line: str) -> List[tuple[float, str]]:
+        out = []
+        for raw in dec_amount_pattern.findall(line):
+            val = parse_float(raw)
+            if val is not None:
+                out.append((val, raw))
+        if out:
+            return out
+        for raw in int_amount_pattern.findall(line):
+            if not raw or raw == '0':
                 continue
-            for raw in amount_pattern.findall(line):
-                amt = float(raw.replace(",", ""))
-                if CONFIG["min_wage_amount"] <= amt <= CONFIG["max_wage_amount"]:
-                    return amt, raw
+            val = parse_float(raw)
+            if val is None:
+                continue
+            out.append((val, raw))
+        return out
+
+    def plausible_amount(val: float) -> bool:
+        return 1.0 <= val <= 1000000.0
+
+    def choose_net_amount(lines: List[str], serial_idx: int) -> Optional[tuple[float, str]]:
+        # Prefer decimal values after the serial line. In many registers the net
+        # payable appears immediately after serial / LWF columns.
+        forward_hits: List[tuple[int, float, str]] = []
+        for k in range(serial_idx + 1, min(len(lines), serial_idx + 8)):
+            line = lines[k].strip()
+            if not line or line.upper() in {'WD', 'WO', 'PD', 'PL', 'PH', 'CL', 'TOT', 'TOTAL'}:
+                continue
+            for val, raw in candidate_amounts_from_line(line):
+                if '.' in raw and plausible_amount(val):
+                    forward_hits.append((k, val, raw))
+        if forward_hits:
+            # take the first reasonable decimal after the serial
+            _, val, raw = forward_hits[0]
+            return val, raw
+
+        # Fallback: use reasonable numeric values shortly before the serial.
+        back_hits: List[tuple[int, float, str]] = []
+        for k in range(max(0, serial_idx - 6), serial_idx):
+            line = lines[k].strip()
+            if not line or line.upper() in {'WD', 'WO', 'PD', 'PL', 'PH', 'CL', 'TOT', 'TOTAL'}:
+                continue
+            for val, raw in candidate_amounts_from_line(line):
+                # ignore attendance/day counts and tiny codes
+                if val < 1000 or not plausible_amount(val):
+                    continue
+                back_hits.append((k, val, raw))
+        if back_hits:
+            # Usually the first large figure before serial is the net payable.
+            # If multiple values exist, prefer the earliest large value in the final block.
+            _, val, raw = back_hits[0]
+            return val, raw
         return None
 
     with fitz.open(str(pdf)) as doc:
@@ -156,22 +245,18 @@ def extract_wage_entries(pdf: Path) -> List[dict]:
             lines = [ln.strip() for ln in page.get_text().split("\n") if ln.strip()]
             i = 0
             while i < len(lines):
-                if lines[i] != str(expected_serial):
+                if not is_serial_line(lines[i], expected_serial):
                     i += 1
                     continue
 
-                prev_start = max(0, i - 20)
+                prev_start = max(0, i - 25)
                 prev = lines[prev_start:i]
-                wd_positions = [idx for idx, val in enumerate(prev) if val.upper() == "WD"]
-                if not wd_positions:
-                    i += 1
-                    continue
-                wd_idx = prev_start + wd_positions[-1]
+                wd_positions = [idx for idx, val in enumerate(prev) if val.upper() == 'WD']
+                wd_idx = prev_start + wd_positions[-1] if wd_positions else i
 
-                # Collect consecutive probable name lines immediately before WD.
                 name_parts: List[str] = []
                 j = wd_idx - 1
-                lower_bound = max(0, wd_idx - 4)
+                lower_bound = max(0, wd_idx - 8)
                 while j >= lower_bound:
                     cand = lines[j].strip()
                     if is_probable_name_line(cand):
@@ -182,28 +267,37 @@ def extract_wage_entries(pdf: Path) -> List[dict]:
                         break
                     j -= 1
 
-                cleaned = clean_wage_name(" ".join(reversed(name_parts)))
-                net_info = find_net_amount(lines, i)
-                if not cleaned or not net_info:
-                    i += 1
-                    continue
+                # Fallback for layouts where WD is missing or OCR/text order is odd:
+                # use the nearest probable text line before the serial.
+                if not name_parts:
+                    for j in range(i - 1, max(-1, i - 8), -1):
+                        cand = lines[j].strip()
+                        if is_probable_name_line(cand):
+                            name_parts = [cand]
+                            break
 
-                amt, raw_amt = net_info
-                entries.append({
-                    "id": len(entries),
-                    "serial": expected_serial,
-                    "page": page_no + 1,
-                    "name": cleaned,
-                    "amount": amt,
-                    "amount_text": raw_amt,
-                    "status": "PENDING",
-                    "selected_candidates": [],
-                })
+                cleaned = clean_wage_name(" ".join(reversed(name_parts)))
+                net_info = choose_net_amount(lines, i)
+
+                if cleaned and net_info:
+                    amt, raw_amt = net_info
+                    entries.append({
+                        'id': len(entries),
+                        'serial': expected_serial,
+                        'page': page_no + 1,
+                        'name': cleaned,
+                        'amount': amt,
+                        'amount_text': raw_amt,
+                        'status': 'PENDING',
+                        'selected_candidates': [],
+                    })
+
+                # Always advance when the expected serial is found so one bad row
+                # cannot block every later employee.
                 expected_serial += 1
                 i += 1
 
     return entries
-
 
 def group_lines(page: fitz.Page) -> List[Tuple[int, List, str]]:
     words = page.get_text("words")
@@ -480,9 +574,27 @@ def save_state(data: dict) -> None:
     state_path(data["run_id"]).write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def load_state(run_id: str) -> dict:
-    return json.loads(state_path(run_id).read_text(encoding="utf-8"))
+def load_state(run_id: str) -> Optional[dict]:
+    path = state_path(run_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
+
+
+
+def get_active_state() -> Optional[dict]:
+    run_id = session.get("run_id")
+    if not run_id:
+        return None
+    state = load_state(run_id)
+    if not state:
+        session.pop("run_id", None)
+        return None
+    return state
 
 def current_entry_index(state: dict) -> Optional[int]:
     for idx, entry in enumerate(state["review_queue"]):
@@ -569,6 +681,9 @@ def index():
         wage_entries = extract_wage_entries(wage_path)
         bank_lines = analyze_bank_lines(bank_path)
         review_queue = build_review_queue(wage_entries, bank_lines)
+        if not review_queue:
+            flash("No employees could be extracted from the wage PDF. Please use the updated parser build.", "error")
+            return redirect(url_for("index"))
 
         state = {
             "run_id": run_id,
@@ -586,10 +701,10 @@ def index():
 
 @app.route("/review")
 def review():
-    run_id = session.get("run_id")
-    if not run_id:
+    state = get_active_state()
+    if not state:
+        flash("Session expired or files were removed. Please upload the PDFs again.", "error")
         return redirect(url_for("index"))
-    state = load_state(run_id)
 
     # Recompute default selections on every review load so strong matches are visibly pre-ticked
     # even if an older state file was created before the latest auto-select logic.
@@ -611,6 +726,9 @@ def review():
     total = len(state["review_queue"])
     done = len([e for e in state["review_queue"] if e["status"] != "PENDING"])
     if idx is None:
+        if total == 0:
+            flash("No employees were loaded for review. Please re-upload the wage and statement PDFs.", "error")
+            return redirect(url_for("index"))
         generate_outputs(state)
         yes_count = len([e for e in state["review_queue"] if e["status"] == "APPROVED"])
         skip_count = len([e for e in state["review_queue"] if e["status"] == "SKIPPED"])
@@ -621,10 +739,10 @@ def review():
 
 @app.route("/decide", methods=["POST"])
 def decide():
-    run_id = session.get("run_id")
-    if not run_id:
+    state = get_active_state()
+    if not state:
+        flash("Session expired or files were removed. Please upload the PDFs again.", "error")
         return redirect(url_for("index"))
-    state = load_state(run_id)
     idx = current_entry_index(state)
     if idx is None:
         return redirect(url_for("review"))
@@ -648,23 +766,42 @@ def decide():
 
 @app.route("/download/pdf")
 def download_pdf():
-    run_id = session.get("run_id")
-    if not run_id:
+    state = get_active_state()
+    if not state:
+        flash("Session expired or files were removed. Please upload the PDFs again.", "error")
         return redirect(url_for("index"))
-    state = load_state(run_id)
     output = Path(state["output_pdf"])
     if not output.exists():
         generate_outputs(state)
     return send_file(output, as_attachment=True)
 
 
+@app.route("/download/csv")
+def download_csv():
+    state = get_active_state()
+    if not state:
+        flash("Session expired or files were removed. Please upload the PDFs again.", "error")
+        return redirect(url_for("index"))
+    output = Path(state["output_csv"])
+    try:
+        if not output.exists():
+            generate_outputs(state)
+    except Exception:
+        flash("Could not generate the review CSV for this run. Please upload the PDFs again.", "error")
+        return redirect(url_for("index"))
+    if not output.exists():
+        flash("Review CSV was not created. Please upload the PDFs again.", "error")
+        return redirect(url_for("index"))
+    return send_file(output, as_attachment=True)
+
+
 @app.route("/download/pages-pdf")
 def download_pages_pdf():
     """Download a slim PDF: page 1 always + only pages that contain highlights."""
-    run_id = session.get("run_id")
-    if not run_id:
+    state = get_active_state()
+    if not state:
+        flash("Session expired or files were removed. Please upload the PDFs again.", "error")
         return redirect(url_for("index"))
-    state = load_state(run_id)
 
     # Make sure the full highlighted PDF exists first
     full_output = Path(state["output_pdf"])
@@ -686,7 +823,7 @@ def download_pages_pdf():
     pages_to_keep = sorted(highlighted_pages)
 
     # Build the slim PDF from the already-highlighted output
-    slim_path = Path(state["output_pdf"]).parent / f"pages_only_{run_id}.pdf"
+    slim_path = Path(state["output_pdf"]).parent / f"pages_only_{state["run_id"]}.pdf"
     with fitz.open(str(full_output)) as src:
         out_doc = fitz.open()
         for pidx in pages_to_keep:
@@ -698,17 +835,5 @@ def download_pages_pdf():
                      download_name="highlighted_pages_only.pdf")
 
 
-@app.route("/download/csv")
-def download_csv():
-    run_id = session.get("run_id")
-    if not run_id:
-        return redirect(url_for("index"))
-    state = load_state(run_id)
-    output = Path(state["output_csv"])
-    if not output.exists():
-        generate_outputs(state)
-    return send_file(output, as_attachment=True)
-
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000, debug=False)
+    app.run(debug=True)
