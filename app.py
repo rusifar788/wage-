@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import os
 import json
 import re
 import uuid
@@ -13,7 +14,7 @@ from flask import Flask, render_template, request, redirect, url_for, session, s
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-app.secret_key = "wage-highlighter-local-v3"
+app.secret_key = os.environ.get("SECRET_KEY", "wage-highlighter-local-v3")
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -823,7 +824,7 @@ def download_pages_pdf():
     pages_to_keep = sorted(highlighted_pages)
 
     # Build the slim PDF from the already-highlighted output
-    slim_path = Path(state["output_pdf"]).parent / f"pages_only_{state["run_id"]}.pdf"
+    slim_path = Path(state["output_pdf"]).parent / f"pages_only_{state['run_id']}.pdf"
     with fitz.open(str(full_output)) as src:
         out_doc = fitz.open()
         for pidx in pages_to_keep:
@@ -836,4 +837,5 @@ def download_pages_pdf():
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, debug=False)
